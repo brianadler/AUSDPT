@@ -1,0 +1,90 @@
+import pandas as pd
+import numpy as np
+
+file_name = "LAExtendedData.xlsx"
+df2019 = pd.read_excel(f"data/{file_name}", dtype=str, index_col="award_id_fain", sheet_name="FY2019")
+df2019["Fiscal Year"] = 2019
+df2020 = pd.read_excel(f"data/{file_name}", dtype=str, index_col="award_id_fain", sheet_name="FY2020")
+df2020["Fiscal Year"] = 2020
+df2021 = pd.read_excel(f"data/{file_name}", dtype=str, index_col="award_id_fain", sheet_name="FY2021")
+df2021["Fiscal Year"] = 2021
+#df2022 = pd.read_excel(f"data/{file_name}", dtype=str, index_col="award_id_fain", sheet_name="FY2022")
+#df2022["Fiscal Year"] = 2022
+
+#df = pd.concat([df2019], ignore_index=True)
+df = pd.concat([df2019,df2020,df2021], ignore_index=True)
+#df = df2019
+
+#total_funding_amount,'total_obligated_amount' 'awarding_office_name'
+
+
+to_keep = ['treasury_accounts_funding_this_award',
+            'business_types_description',
+            'object_classes_funding_this_award',
+            'cfda_number', 
+            'federal_action_obligation',
+            'funding_agency_name',
+            'assistance_award_unique_key',
+            'recipient_name',
+            'award_id_uri',
+            'funding_office_name',
+            'funding_sub_agency_name',
+            'total_non_federal_funding_amount',
+            'federal_action_obligation',
+            'primary_place_of_performance_scope',
+            'action_date_fiscal_year',
+            'assistance_type_description',
+            'program_activities_funding_this_award',
+            'primary_place_of_performance_city_name',
+            'usaspending_permalink',
+            'obligated_amount_funded_by_COVID-19_supplementals_for_overall_a']
+
+
+df = df[to_keep].copy()
+df.rename(columns={'award_id_fain': 'Award_ID', 'federal_action_obligation': 'Obligated_Amount', 'action_date_fiscal_year': 'Fiscal_Year'}, inplace=True)
+df[["Obligated_Amount"]] = df[["Obligated_Amount"]].apply(pd.to_numeric)
+# df['Obligated_Amount'] = pd.to_numeric(df["Obligated_Amount"], errors='coerce')
+df['obligated_amount_funded_by_COVID-19_supplementals_for_overall_a'] = pd.to_numeric(df['obligated_amount_funded_by_COVID-19_supplementals_for_overall_a'])
+
+#Remove additional details to CFDA in downloaded data so we have a similar index to compare between the 2 spreadsheets
+#df['Funding Stream Name'] = df['cfda_numbers_and_titles'].map(lambda x: str(x)[8:100])
+df['cfda_number'] = df['cfda_number'].map(lambda x: str(x)[:6]) # technically this one is no longer a "number and title"
+
+group_df = df.groupby(["cfda_number","Fiscal_Year"])[["Obligated_Amount"]].sum()
+group_df = group_df.reset_index().pivot(index="cfda_number", columns="Fiscal_Year")
+group_df.columns = group_df.columns.to_flat_index()  # Getting rid of hierarchical index
+
+noduplicatesdf = df.drop_duplicates(subset = "cfda_number", keep = "first")
+#merge_df = group_df.merge(noduplicatesdf[["obligated_amount_funded_by_COVID-19_supplementals","cfda_numbers_and_titles", "recipient_name","Funding Stream Name","awarding_agency_name"]], right_on="cfda_numbers_and_titles", left_on="cfda_numbers_and_titles")
+merge_df = group_df.merge(noduplicatesdf[["obligated_amount_funded_by_COVID-19_supplementals_for_overall_a","cfda_number", "recipient_name"]], right_on="cfda_number", left_on="cfda_number")
+merge_df.rename(columns={'obligated_amount_funded_by_COVID-19_supplementals_for_overall_a': 'Obligated Supplemental COVID Funding','recipient_name': 'In-state Administrator','cfda_number': 'Budget Item Number', ('Obligated_Amount', '2021'): 'FY21 Appropriation',('Obligated_Amount', '2020'): 'FY20 Appropriation',('Obligated_Amount', '2019'): 'FY19 Appropriation'}, inplace=True)
+
+def check_covidfunding(x):
+    try:
+        return x["Obligated Supplemental COVID Funding"]
+    except Exception:
+        return "No"
+
+def check_fundinglevel(x):
+    return "Federal"
+
+merge_df["Obligated Supplemental COVID Funding"] = merge_df.apply(check_covidfunding, axis=1)
+merge_df["Funding Level"] = merge_df.apply(check_fundinglevel, axis=1)
+
+
+file_name2 = "FederalTool2.12.xlsx"
+#file_name2 = "TribalTool.xlsx"
+
+df2 = pd.read_excel(f"data/{file_name2}", dtype=str, index_col=False, sheet_name="TestSheet")
+df2.drop_duplicates(subset="Budget Item Number", inplace=True)
+
+leftmergedf = merge_df.merge(df2, how="left", left_on="Budget Item Number", right_on="Budget Item Number")
+
+nan_value = float("NaN")
+leftmergedf.replace("", nan_value, inplace=True)
+leftmergedf.dropna(subset = ["Budget Item Number"], inplace=True)
+
+xlsxfile = 'LAExtendedOutput2.15.xlsx'
+excel_writer = pd.ExcelWriter(xlsxfile, engine='xlsxwriter')
+leftmergedf.to_excel(excel_writer, sheet_name="Sheet1",startrow=0, startcol=0, header = True, index=True)
+excel_writer.save()
